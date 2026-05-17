@@ -12,5 +12,5 @@ rustyline = "18"
 
 
 [profile.release]
-lto = true
-strip = "symbols"
+# lto = true
+# strip = "symbols"
