@@ -8,6 +8,15 @@ use std::{collections::HashMap, time::Duration};
 mod utils;
 use utils::*;
 
+mod tools;
+use tools::*;
+
+// system prompt idea: use 2>&1 | tail -20 to get a limited amount of output from the shell tool
+// prefer targeted edits using edit tool after confirming line numbers
+
+const SYSTEM_PROMPT: &'static str =
+    "You are a coding agent. Prefer targeted edits with line ranges over complete file rewrites.";
+
 /* Chat-completions based agent :/ I really dislike the completions API.
  * This agent supports only function type tool calls with no parameter nesting
  */
@@ -95,57 +104,6 @@ impl ToolCall {
                 "name": self.tool_name,
                 "arguments": self.arguments_string
             }
-        })
-    }
-}
-
-/**************** Tool description ****************/
-
-#[derive(Clone, Debug)]
-struct ToolParameter {
-    name: &'static str,
-    ptype: &'static str, // string, number or boolean
-    description: Option<&'static str>,
-    is_required: bool,
-}
-
-#[derive(Clone, Debug)]
-struct ToolDefinition {
-    // tool_type: String, // Function
-    name: &'static str,
-    description: Option<&'static str>,
-    parameters: &'static [ToolParameter],
-    // callback:
-}
-
-impl ToolDefinition {
-    fn to_json(&self) -> Value {
-        let mut tool = Map::new();
-        tool.insert("name".into(), json!(self.name));
-        if let Some(desc) = self.description.as_ref() {
-            tool.insert("description".into(), json!(desc));
-        }
-        tool.insert(
-            "parameters".into(),
-            json!({
-                "type": "object",
-                "properties": Value::Object(Map::from_iter(self.parameters.iter().map(
-                    |p| (p.name.into(),
-                        if let Some(desc) = p.description {
-                            json!({"type": p.ptype, "description": desc})
-                        } else { json!({"type": p.ptype}) },
-                    ),
-                ))),
-                "required": Value::Array(
-                    self.parameters.iter().filter_map(|p| {
-                        p.is_required.then(|| Value::String(p.name.into()))
-                    }).collect(),
-                )
-            }),
-        );
-        json!({
-            "type": "function",
-            "function": Value::Object(tool)
         })
     }
 }
@@ -241,10 +199,25 @@ fn generate_response(
 }
 
 fn main() {
+    /* llama-server -m /Users/ilia/.cache/lm-studio/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf -c 260000 --chat-template-kwargs '{"preserve_thinking":true}'     --temp 0.6 \
+      --top-p 0.95 \
+      --top-k 20 \
+      --presence-penalty 0.0 \
+      --min-p 0.00 \
+    --host 0.0.0.0 */
+    // let config = Config {
+    //     url: "http://100.95.123.125:8080/v1/chat/completions".into(),
+    //     model_name: "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf".into(),
+    //     api_key: "none".into(),
+    //     stream: true,
+    //     preserve_thinking: true,
+    //     truncate_long_tool_results_after_turn_finished: false,
+    // };
+    /*  For omlx */
     let config = Config {
-        url: "http://100.95.123.125:8080/v1/chat/completions".into(),
-        model_name: "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf".into(),
-        api_key: "none".into(),
+        url: "http://100.95.123.125:8000/v1/chat/completions".into(),
+        model_name: "Qwen3.6-35B-A3B-oQ6-fp16-mtp".into(),
+        api_key: include_str!("../.apikey").trim().into(),
         stream: true,
         preserve_thinking: true,
         truncate_long_tool_results_after_turn_finished: false,
@@ -252,20 +225,13 @@ fn main() {
 
     let mut thread: Vec<Message> = vec![];
 
-    let mut readline = rustyline::DefaultEditor::new().unwrap();
+    thread.push(Message {
+        role: "system".into(),
+        content: SYSTEM_PROMPT.into(),
+        ..Default::default()
+    });
 
-    let tools = &[ToolDefinition {
-        name: "Shell",
-        description: Some(
-            "Run a shell/terminal command. Shell state is not preserved between calls of this tool.",
-        ),
-        parameters: &[ToolParameter {
-            ptype: "string",
-            name: "command",
-            description: Some("Command to run in default OS shell."),
-            is_required: true,
-        }],
-    }];
+    let mut readline = rustyline::DefaultEditor::new().unwrap();
 
     loop {
         let input = readline.readline(">> ");
@@ -279,25 +245,23 @@ fn main() {
 
                 /* Response loop until no tool calls */
                 loop {
-                    let response = generate_response(&config, tools, &thread).unwrap();
+                    let response = generate_response(&config, TOOL_DEFINITIONS, &thread).unwrap();
                     let num_tool_calls = response.tool_calls.len();
 
                     /* Execute tool calls now and push them to the history */
                     let mut tool_results = vec![];
                     for tool_call in &response.tool_calls {
-                        if tool_call.tool_name == "Shell" {
-                            tool_results.push(Message {
-                                role: "tool".into(),
-                                tool_call_id: Some(tool_call.id.clone()),
-                                content: run_shell_command(
-                                    &serde_json::from_str::<Value>(&tool_call.arguments_string)
-                                        .unwrap()["command"]
-                                        .as_str()
-                                        .unwrap(),
-                                ),
-                                ..Default::default()
-                            })
-                        }
+                        tool_results.push(Message {
+                            role: "tool".into(),
+                            tool_call_id: Some(tool_call.id.clone()),
+                            content: call_tool(
+                                &tool_call.tool_name,
+                                &tool_call.arguments_string,
+                                TOOL_DEFINITIONS,
+                                TOOL_FUNCTIONS,
+                            ),
+                            ..Default::default()
+                        })
                     }
 
                     thread.push(response);

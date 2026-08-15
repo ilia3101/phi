@@ -1,21 +1,9 @@
-use std::env;
 use std::error::Error;
 use std::io::{Read, Write};
-use std::process::Command;
 
 pub fn print_and_flush(data: &str) {
     print!("{}", data);
     std::io::stdout().flush().unwrap();
-}
-
-pub fn run_shell_command(cmd: &str) -> String {
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    let output = Command::new(shell).arg("-c").arg(cmd).output().unwrap();
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return format!("command failed: {}", stderr);
-    }
-    String::from_utf8_lossy(&output.stdout).to_string()
 }
 
 /* This struct is used for streaming responses - it reads
