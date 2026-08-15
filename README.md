@@ -1,4 +1,2 @@
 # phi
-An actually small coding agent (unlike pi)
-
-has one tool so far: Shell
+An actually small coding agent (unlike pi). Ironically, entirely hand coded. I wanted to learn how it works. And now I know how poorly designed LLM APIs seem to be.
